@@ -359,6 +359,43 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if(va0 >= MAXVA){
+      printf("copyout: va exceeds MAXVA\n");
+      return -1;
+    }
+    pte_t *pte = walk(pagetable, va0, 0);
+    if (pte == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_V) == 0) {
+      printf("copyout: invalid pte\n");
+      return -1;
+    }
+    if ((*pte & PTE_W) == 0 && (*pte & PTE_COW) != 0)
+    {
+      // Save old PA/flags BEFORE modifying PTE
+      uint64 oldpa = PTE2PA(*pte);
+      uint flags = PTE_FLAGS(*pte);
+      // Allocate a new page
+      char *mem = kalloc();
+      if (mem == 0)
+      {
+        printf("copyout: kalloc failed\n");
+        return -1;
+      }
+      // Copy old page to new page
+      // xv6-riscv has RAM identity-mapped in kernel, so (char*)oldpa is OK.
+      memmove(mem, (char *)oldpa, PGSIZE);
+
+      // New mapping: writable, not COW
+      flags = (flags | PTE_W) & ~PTE_COW;
+
+      // Update the PTE in place (avoid mappages() collision)
+      *pte = PA2PTE((uint64)mem) | flags | PTE_V;
+
+      // Flush TLB so CPU stops using old translation
+      sfence_vma();
+
+      kfree((void *)oldpa); // 减少旧物理页引用计数 kfree中会自行检验pa的剩余引用计数 不是0就不释放物理页 只会将其引用计数减1
+    }
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;

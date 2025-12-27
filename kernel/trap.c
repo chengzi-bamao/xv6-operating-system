@@ -114,7 +114,8 @@ usertrap(void)
     // Flush TLB so CPU stops using old translation
     sfence_vma();
 
-    // NOTE: no refcount handling here => old shared page won't be freed.
+    kfree((void*)oldpa); // 减少旧物理页引用计数 kfree中会自行检验pa的剩余引用计数 不是0就不释放物理页 只会将其引用计数减1
+
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", scause, p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
