@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -37,51 +38,99 @@ void
 usertrap(void)
 {
   int which_dev = 0;
+  struct proc *p = myproc();
 
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
-  // send interrupts and exceptions to kerneltrap(),
-  // since we're now in the kernel.
+  // send traps to kerneltrap() while in the kernel.
   w_stvec((uint64)kernelvec);
 
-  struct proc *p = myproc();
-  
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
-  if(r_scause() == 8){
-    // system call
 
+  uint64 scause = r_scause();
+
+  if(scause == 8){
+    // system call
     if(p->killed)
       exit(-1);
 
-    // sepc points to the ecall instruction,
-    // but we want to return to the next instruction.
+    // skip ecall instruction
     p->trapframe->epc += 4;
 
-    // an interrupt will change sstatus &c registers,
-    // so don't enable until done with those registers.
     intr_on();
-
     syscall();
   } else if((which_dev = devintr()) != 0){
-    // ok
+    // ok: device interrupt
+  } else if(scause == 15){
+    // Store/AMO page fault: COW happens here.
+
+    uint64 va = r_stval();
+    if(va == 0 || va >= MAXVA){
+      p->killed = 1;
+      goto done;
+    }
+    va = PGROUNDDOWN(va);
+
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if(pte == 0){
+      p->killed = 1;
+      goto done;
+    }
+
+    // must be a valid user COW page and currently not writable
+    if(((*pte & PTE_V) == 0) || ((*pte & PTE_U) == 0)){
+      p->killed = 1;
+      goto done;
+    }
+    if(((*pte & PTE_COW) == 0) || ((*pte & PTE_W) != 0)){
+      // not a COW fault we can handle
+      p->killed = 1;
+      goto done;
+    }
+
+    // Save old PA/flags BEFORE modifying PTE
+    uint64 oldpa = PTE2PA(*pte);
+    uint flags = PTE_FLAGS(*pte);
+
+    // Allocate a new page
+    char *mem = kalloc();
+    if(mem == 0){
+      p->killed = 1;
+      goto done;
+    }
+
+    // Copy old page to new page
+    // xv6-riscv has RAM identity-mapped in kernel, so (char*)oldpa is OK.
+    memmove(mem, (char *)oldpa, PGSIZE);
+
+    // New mapping: writable, not COW
+    flags = (flags | PTE_W) & ~PTE_COW;
+
+    // Update the PTE in place (avoid mappages() collision)
+    *pte = PA2PTE((uint64)mem) | flags | PTE_V;
+
+    // Flush TLB so CPU stops using old translation
+    sfence_vma();
+
+    // NOTE: no refcount handling here => old shared page won't be freed.
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+    printf("usertrap(): unexpected scause %p pid=%d\n", scause, p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
 
+done:
   if(p->killed)
     exit(-1);
 
-  // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
     yield();
 
   usertrapret();
 }
+
 
 //
 // return to user space

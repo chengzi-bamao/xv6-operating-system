@@ -9,52 +9,63 @@
 #include "riscv.h"
 #include "defs.h"
 
+#define PA2INDEX(pa) (((uint64)pa-KERNBASE) / PGSIZE)
+
 void freerange(void *pa_start, void *pa_end);
+
+int cowcount[(PHYSTOP-KERNBASE) / PGSIZE];
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
-struct run {
+struct run
+{
   struct run *next;
 };
 
-struct {
+struct
+{
   struct spinlock lock;
   struct run *freelist;
 } kmem;
 
-void
-kinit()
+void kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  freerange(end, (void *)PHYSTOP);
 }
 
-void
-freerange(void *pa_start, void *pa_end)
+void freerange(void *pa_start, void *pa_end)
 {
   char *p;
-  p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  p = (char *)PGROUNDUP((uint64)pa_start);
+  for (; p + PGSIZE <= (char *)pa_end; p += PGSIZE){
+    cowcount[PA2INDEX(p)] = 1;
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by v,
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
-void
-kfree(void *pa)
+void kfree(void *pa)
 {
   struct run *r;
 
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+  if (((uint64)pa % PGSIZE) != 0 || (char *)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  acquire(&kmem.lock);
+  int remain = --cowcount[PA2INDEX(pa)];
+  release(&kmem.lock);
+  if (remain > 0)
+    return;
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
-  r = (struct run*)pa;
+  r = (struct run *)pa;
 
   acquire(&kmem.lock);
   r->next = kmem.freelist;
@@ -72,11 +83,31 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
+  if (r)
+    kmem.freelist = r->next;//r->next等价于：(*r).next
   release(&kmem.lock);
 
-  if(r)
-    memset((char*)r, 5, PGSIZE); // fill with junk
-  return (void*)r;
+  if (r)
+  {
+    memset((char *)r, 5, PGSIZE); // fill with junk
+    int idx = PA2INDEX(r);
+    if (cowcount[idx] != 0)
+    {
+      panic("kalloc: cowcount[idx] != 0");
+    }
+    cowcount[idx] = 1; // 新allocate的物理页的计数器为1
+  }
+  return (void *)r;
+}
+
+// helper函数
+void adjustref(uint64 pa, int num)
+{
+  if (pa >= PHYSTOP)
+  {
+    panic("addref: pa too big");
+  }
+  acquire(&kmem.lock);
+  cowcount[PA2INDEX(pa)] += num;
+  release(&kmem.lock);
 }
