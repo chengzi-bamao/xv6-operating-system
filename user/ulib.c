@@ -3,6 +3,12 @@
 #include "kernel/fcntl.h"
 #include "user/user.h"
 
+/*
+ * strcpy - 将以 NUL 结尾的字符串从 `t` 复制到 `s`。
+ * @s: 目标缓冲区（须足够大）
+ * @t: 源 NUL 终止字符串
+ * 返回: 指向目标缓冲区 `s` 的指针。
+ */
 char*
 strcpy(char *s, const char *t)
 {
@@ -14,6 +20,12 @@ strcpy(char *s, const char *t)
   return os;
 }
 
+/*
+ * strcmp - 逐字典序比较两个 NUL 终止的字符串。
+ * @p: 第一个字符串
+ * @q: 第二个字符串
+ * 返回: 若 p<q 返回负值，p==q 返回 0，p>q 返回正值（按无符号字符差值）。
+ */
 int
 strcmp(const char *p, const char *q)
 {
@@ -22,6 +34,11 @@ strcmp(const char *p, const char *q)
   return (uchar)*p - (uchar)*q;
 }
 
+/*
+ * strlen - 计算 NUL 终止字符串的长度。
+ * @s: 输入字符串
+ * 返回: 不包括终止 NUL 的字符数。
+ */
 uint
 strlen(const char *s)
 {
@@ -32,6 +49,13 @@ strlen(const char *s)
   return n;
 }
 
+/*
+ * memset - 用指定字节值填充一段内存区域。
+ * @dst: 目标内存区域
+ * @c: 字节值（会转换为 unsigned char）
+ * @n: 要设置的字节数
+ * 返回: 指向 `dst` 的指针。
+ */
 void*
 memset(void *dst, int c, uint n)
 {
@@ -43,6 +67,12 @@ memset(void *dst, int c, uint n)
   return dst;
 }
 
+/*
+ * strchr - 在字符串 `s` 中查找字符 `c` 的首次出现。
+ * @s: 要搜索的 NUL 终止字符串
+ * @c: 要查找的字符
+ * 返回: 指向匹配字符的指针，未找到返回 0。
+ */
 char*
 strchr(const char *s, char c)
 {
@@ -52,6 +82,13 @@ strchr(const char *s, char c)
   return 0;
 }
 
+/*
+ * gets - 从文件描述符 0（标准输入）读取一行到缓冲区。
+ * @buf: 目标缓冲区
+ * @max: 最大读取字节数（包含终止 NUL）
+ * 说明: 最多读取 max-1 字节，遇到 EOF 或换行/回车则停止。
+ * 返回: 指向 `buf` 的指针（已 NUL 终止）。
+ */
 char*
 gets(char *buf, int max)
 {
@@ -70,6 +107,13 @@ gets(char *buf, int max)
   return buf;
 }
 
+/*
+ * stat - 获取指定文件的状态信息。
+ * @n: 文件路径名
+ * @st: 指向将被填充的 struct stat
+ * 返回: 成功返回 0，失败返回 -1。
+ * 说明: 以只读方式打开文件，调用 fstat，然后关闭文件。
+ */
 int
 stat(const char *n, struct stat *st)
 {
@@ -84,6 +128,11 @@ stat(const char *n, struct stat *st)
   return r;
 }
 
+/*
+ * atoi - 将数字字符串转换为整数。
+ * @s: 包含十进制数字的 NUL 终止字符串
+ * 返回: 解析得到的非负整数（遇到第一个非数字字符停止）。
+ */
 int
 atoi(const char *s)
 {
@@ -95,6 +144,13 @@ atoi(const char *s)
   return n;
 }
 
+/*
+ * memmove - 将 `n` 字节从 `vsrc` 复制到 `vdst`，可正确处理重叠区域。
+ * @vdst: 目标缓冲区
+ * @vsrc: 源缓冲区
+ * @n: 要复制的字节数
+ * 返回: 指向 `vdst` 的指针。
+ */
 void*
 memmove(void *vdst, const void *vsrc, int n)
 {
@@ -115,6 +171,13 @@ memmove(void *vdst, const void *vsrc, int n)
   return vdst;
 }
 
+/*
+ * memcmp - 按字节比较两段内存区域。
+ * @s1: 第一段内存
+ * @s2: 第二段内存
+ * @n: 比较的字节数
+ * 返回: 相等返回 0，若在首个不同字节处 s1<s2 返回负值，s1>s2 返回正值（按无符号字符差值）。
+ */
 int
 memcmp(const void *s1, const void *s2, uint n)
 {
@@ -129,6 +192,14 @@ memcmp(const void *s1, const void *s2, uint n)
   return 0;
 }
 
+/*
+ * memcpy - 将 `n` 字节从 `src` 复制到 `dst`。
+ * @dst: 目标缓冲区
+ * @src: 源缓冲区
+ * @n: 要复制的字节数
+ * 返回: 指向 `dst` 的指针。
+ * 说明: 通过 memmove 实现，能够正确处理重叠情况。
+ */
 void *
 memcpy(void *dst, const void *src, uint n)
 {

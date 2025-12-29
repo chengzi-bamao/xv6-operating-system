@@ -2,6 +2,28 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 
+// User-level copy of the kernel `struct context` layout used by the
+// assembly thread_switch routine. Keeping this local avoids including
+// kernel/proc.h (which pulls in kernel-only types not available to user
+// programs) while matching the register save layout expected by
+// uthread_switch.S.
+struct thread_context {
+  uint64 ra;
+  uint64 sp;
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
+};
+
 /* Possible states of a thread: */
 #define FREE        0x0
 #define RUNNING     0x1
@@ -14,7 +36,8 @@
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
-
+  struct  thread_context thread_context;
+  
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
@@ -28,7 +51,9 @@ thread_init(void)
   // save thread 0's state.  thread_schedule() won't run the main thread ever
   // again, because its state is set to RUNNING, and thread_schedule() selects
   // a RUNNABLE thread.
+  //将main线程初始化为第0个线程
   current_thread = &all_thread[0];
+  //设置其状态为RUNNING 使得thread_schedule不会再运行main线程
   current_thread->state = RUNNING;
 }
 
@@ -56,13 +81,16 @@ thread_schedule(void)
   }
 
   if (current_thread != next_thread) {         /* switch threads?  */
-    next_thread->state = RUNNING;
-    t = current_thread;
-    current_thread = next_thread;
+    next_thread->state = RUNNING;              // 只是一个软件标志
+    t = current_thread;                        // t 记住“旧线程”
+    current_thread = next_thread;              // 全局指针指向“新线程”
     /* YOUR CODE HERE
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+    thread_switch((uint64)&t->thread_context,
+              (uint64)&next_thread->thread_context);
+
   } else
     next_thread = 0;
 }
@@ -75,8 +103,17 @@ thread_create(void (*func)())
   for (t = all_thread; t < all_thread + MAX_THREAD; t++) {
     if (t->state == FREE) break;
   }
-  t->state = RUNNABLE;
+  
   // YOUR CODE HERE
+  // 初始化一个新的进程线程结构体t
+  memset((void *)(t->stack),0,STACK_SIZE);
+  memset((void *)(&t->thread_context),0,(uint)sizeof(struct thread_context));
+  t->state = RUNNABLE;
+  // 设置线程的返回地址为func
+  t->thread_context.ra=(uint64)(func);
+  //栈指针指向栈顶
+  t->thread_context.sp = (uint64)(t->stack + STACK_SIZE);
+
 }
 
 void 
