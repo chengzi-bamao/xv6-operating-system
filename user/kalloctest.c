@@ -22,6 +22,9 @@ main(int argc, char *argv[])
   exit(0);
 }
 
+/// @brief 函数作用：获取当前系统中未分配的物理内存页数
+/// @param print 是否打印统计信息
+/// @return 未分配的物理内存页数
 int ntas(int print)
 {
   int n;
@@ -49,8 +52,10 @@ void test1(void)
       printf("fork failed");
       exit(-1);
     }
+    // Child process
     if(pid == 0){
       for(i = 0; i < N; i++) {
+        // allocate a page, write to it, then free it
         a = sbrk(4096);
         *(int *)(a+4) = 1;
         a1 = sbrk(-4096);
@@ -62,7 +67,7 @@ void test1(void)
       exit(-1);
     }
   }
-
+  
   for(int i = 0; i < NCHILD; i++){
     wait(0);
   }

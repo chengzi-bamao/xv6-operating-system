@@ -14,6 +14,9 @@ void freerange(void *pa_start, void *pa_end);
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
 
+char *kmem_name[NCPU] = {"kmem0", "kmem1", "kmem2", "kmem3",
+                          "kmem4", "kmem5", "kmem6", "kmem7"};
+
 struct run {
   struct run *next;
 };
@@ -21,15 +24,22 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem[NCPU];
+
+
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  // initlock(&kmem.lock, "kmem");
+  for(int i = 0; i < NCPU; i++) {
+    initlock(&kmem[i].lock, kmem_name[i]);
+  }
   freerange(end, (void*)PHYSTOP);
 }
 
+// Free the physical memory pages
+// between pa_start and pa_end.
 void
 freerange(void *pa_start, void *pa_end)
 {
@@ -55,11 +65,13 @@ kfree(void *pa)
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
-
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();
+  int cpu_id = cpuid();
+  pop_off();
+  acquire(&kmem[cpu_id].lock);
+  r->next = kmem[cpu_id].freelist;
+  kmem[cpu_id].freelist = r;
+  release(&kmem[cpu_id].lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -69,12 +81,33 @@ void *
 kalloc(void)
 {
   struct run *r;
-
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  push_off();
+  int cpu_id = cpuid();
+  pop_off();
+  acquire(&kmem[cpu_id].lock);
+  r = kmem[cpu_id].freelist;
+  if(r){
+    kmem[cpu_id].freelist = r->next;
+    release(&kmem[cpu_id].lock);
+  }
+  else{
+    release(&kmem[cpu_id].lock);
+    // try to steal a page from other CPU's freelist
+    for(int i = 1; i < NCPU; i++) {
+      int other_cpu_id = (cpu_id + i) % NCPU;
+      acquire(&kmem[other_cpu_id].lock);
+      r = kmem[other_cpu_id].freelist;
+      if(r) {
+        //偷到一页内存 恢复其他CPU的freelist
+        kmem[other_cpu_id].freelist = r->next;
+        //释放其他CPU的锁
+        release(&kmem[other_cpu_id].lock);
+        break;
+      }
+      //没有偷到 释放其他CPU的锁 继续尝试
+      release(&kmem[other_cpu_id].lock);
+    }
+  }
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk

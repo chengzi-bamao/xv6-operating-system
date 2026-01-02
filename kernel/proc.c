@@ -476,8 +476,8 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        //从 调度器栈 到 用户内核栈（把 CPU 交给进程）
         swtch(&c->context, &p->context);
-
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
@@ -514,6 +514,7 @@ sched(void)
     panic("sched interruptible");
 
   intena = mycpu()->intena;
+  //从 用户内核栈 到 内核调度器栈（把 CPU 交回调度器）
   swtch(&p->context, &mycpu()->context);
   mycpu()->intena = intena;
 }
