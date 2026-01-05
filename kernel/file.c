@@ -158,7 +158,7 @@ filewrite(struct file *f, uint64 addr, int n)
       int n1 = n - i;
       if(n1 > max)
         n1 = max;
-
+      //拆分大文件写入为多次小文件写入
       begin_op();
       ilock(f->ip);
       if ((r = writei(f->ip, 1, addr + i, f->off, n1)) > 0)

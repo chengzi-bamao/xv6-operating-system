@@ -134,6 +134,7 @@ begin_op(void)
       // this op might exhaust log space; wait for commit.
       sleep(&log, &log.lock);
     } else {
+      //当前有多少个并发文件系统操作正在这个事务里进行
       log.outstanding += 1;
       release(&log.lock);
       break;

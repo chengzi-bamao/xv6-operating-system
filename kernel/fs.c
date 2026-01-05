@@ -374,27 +374,64 @@ iunlockput(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
+
+/*bmap()处理两种类型的块编号。
+bn参数是一个“逻辑块号”——文件中相对于文件开头的块号。
+ip->addrs[]中的块号和bread()的参数都是磁盘块号。
+您可以将bmap()视为将文件的逻辑块号映射到磁盘块号。*/
 static uint
 bmap(struct inode *ip, uint bn)
 {
+  //a用于承接间接块地址
   uint addr, *a;
   struct buf *bp;
-
+  //is direct block?
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0)
       ip->addrs[bn] = addr = balloc(ip->dev);
     return addr;
   }
+
   bn -= NDIRECT;
 
+  // Indirect block.(LEVEL 1)
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
     if((addr = ip->addrs[NDIRECT]) == 0)
       ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+    //把磁盘上addr读进buffer cache
     bp = bread(ip->dev, addr);
+    //把buffer cache的data部分强制转换成uint指针赋值给a（该buffer cache的data存储的数据 就是一级指针的 地址）
     a = (uint*)bp->data;
+    //a[bn] 如果是 0，说明这个逻辑块对应的数据块还没分配
     if((addr = a[bn]) == 0){
       a[bn] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
+
+  bn -= NINDIRECT;
+
+  //if Double indirect?(LEVEL 2)
+  if(bn < NINDIRECT * NINDIRECT){
+    // Load double indirect block, allocating if necessary.
+    if((addr = ip->addrs[NDIRECT+1]) == 0)
+      ip->addrs[NDIRECT+1] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    //看看二级索引块中对应的一级索引块地址是否没有分配
+    if((addr = a[bn / NINDIRECT]) == 0){
+      a[bn / NINDIRECT] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    // Load indirect block.
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn % NINDIRECT]) == 0){
+      a[bn % NINDIRECT] = addr = balloc(ip->dev);
       log_write(bp);
     }
     brelse(bp);
@@ -420,6 +457,7 @@ itrunc(struct inode *ip)
     }
   }
 
+  // Directly free LEVEL 1 indirect blocks
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
@@ -430,6 +468,26 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  // Directly free LEVEL 2 indirect blocks
+  if(ip->addrs[NDIRECT+1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++){
+      if(a[j]){
+        struct buf *bp1 = bread(ip->dev, a[j]);
+        uint *a1 = (uint*)bp1->data;
+        for(int k = 0; k < NINDIRECT; k++){
+          if(a1[k])
+            bfree(ip->dev, a1[k]);
+        }
+        brelse(bp1);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT+1]);
+    ip->addrs[NDIRECT+1] = 0;
   }
 
   ip->size = 0;
