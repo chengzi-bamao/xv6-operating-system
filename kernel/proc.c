@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -133,6 +134,11 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  // initialize VMA array
+  for(int i = 0; i < MAX_VMAS; i++) {
+    p->vmas[i].valid = 0; // mark all VMA entries as valid
+  }
 
   return p;
 }
@@ -300,6 +306,16 @@ fork(void)
 
   pid = np->pid;
 
+  for (int i = 0; i < MAX_VMAS; i++)
+  {
+    np->vmas[i].valid = 0;
+    if (p->vmas[i].valid)
+    { // 复制vma entry
+      memmove(&np->vmas[i], &p->vmas[i], sizeof(struct vma));
+      filedup(p->vmas[i].file); // 增加引用次数
+    }
+  }
+
   np->state = RUNNABLE;
 
   release(&np->lock);
@@ -350,6 +366,18 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+    // unmap any mmapped region
+  for (int i = 0; i < MAX_VMAS; i++) {
+    if (p->vmas[i].valid) {
+      if (p->vmas[i].flags & MAP_SHARED) {
+        filewrite(p->vmas[i].file, p->vmas[i].addr, p->vmas[i].length);
+      }
+      fileclose(p->vmas[i].file);
+      uvmunmap(p->pagetable, p->vmas[i].addr, p->vmas[i].length / PGSIZE, 1);
+      p->vmas[i].valid = 0;
     }
   }
 

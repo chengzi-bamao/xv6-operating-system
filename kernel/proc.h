@@ -81,6 +81,21 @@ struct trapframe {
 };
 
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+#define MAX_VMAS 16
+
+//VMA structure
+struct vma {
+  uint64 addr;         // starting virtual address
+  int length;     // length of the mapping
+  int prot;          // protection flags
+  int flags;         // mapping flags
+  int fd;            // file descriptor
+  int offset;      // offset in the file
+
+  struct file *file; // pointer to the file structure
+
+  int valid;        // 0 表示empty entry, 1 表示valid entry
+};
 
 // Per-process state
 struct proc {
@@ -103,4 +118,7 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // VMA array
+  struct vma vmas[MAX_VMAS];
 };

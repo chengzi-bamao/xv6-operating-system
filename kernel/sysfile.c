@@ -484,3 +484,128 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  //get the current process
+  struct proc *p = myproc();
+
+  //define arguments
+  uint64 addr;
+  int length;
+  int prot;
+  int flags;
+  int fd;
+  int offset;
+
+  struct file * f;
+
+  //get arguments
+  if(argaddr(0,&addr) < 0 || argint(1,&length) < 0 || argint(2,&prot) < 0 ||
+   argint(3,&flags) < 0 || argfd(4,&fd,&f) < 0 || argint(5,&offset) < 0)
+    return -1;
+
+  //sanity checks
+  if(length <= 0 || fd < 0 || fd >= NOFILE)
+    return -1;
+  if(p->ofile[fd] == 0)
+    return -1;
+  if(!(flags & MAP_SHARED) && !(flags & MAP_PRIVATE))
+    return -1;
+  if((flags & MAP_SHARED) && (p->ofile[fd]->writable == 0) && (prot & PROT_WRITE))
+    return -1;
+    
+  // go through the VMA array to find an empty slot
+  for(int i = 0; i < MAX_VMAS; i++){
+    if(p->vmas[i].valid == 0){
+      //每个进程的虚拟地址 都是从零开始的 可以直接把进程的size写入进去
+      p->vmas[i].addr = p->sz;
+      p->sz += length;
+
+      p->vmas[i].length = length;
+      p->vmas[i].prot = prot;
+      p->vmas[i].flags = flags; 
+      p->vmas[i].fd = fd;
+      p->vmas[i].valid = 1;
+      p->vmas[i].offset = offset;
+
+      // set up the file pointer
+      p->vmas[i].file = f;
+      filedup(f); // increment reference count
+
+      return p->vmas[i].addr;
+    }
+  }
+
+  return -1;//same to return 0xfffffffff
+}
+
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int length;
+
+  if (argaddr(0, &addr) < 0 || argint(1, &length) < 0)
+    return -1;
+
+  if (length <= 0)
+    return -1;
+
+  struct proc *p = myproc();
+
+  // 找对应的 VMA
+  struct vma *vma = 0;
+  for (int i = 0; i < MAX_VMAS; i++) {
+    if (p->vmas[i].valid != 1)
+      continue;
+
+    uint64 start = p->vmas[i].addr;
+    uint64 end   = start + p->vmas[i].length;
+
+    if (addr >= start && addr < end) {
+      vma = &p->vmas[i];
+      break;
+    }
+  }
+
+  if (vma == 0)
+    return -1;
+
+  // 页对齐：起点向下取整，长度向上取整
+  uint64 va0 = PGROUNDDOWN(addr);
+  uint64 len = PGROUNDUP((uint64)length);
+  int npages = len / PGSIZE;
+
+  //如果 vma->flags 是 MAP_SHARED，需要把已映射页写回文件（按页+offset）
+  if(vma->flags & MAP_SHARED){
+    if(filewrite(vma->file,va0,len)<0){
+      printf("munmap:file write back error\n");
+    }
+  }
+
+  // 解除映射（注意：lazy 情况下某些页可能没 mapped，会导致 uvmunmap panic）
+  // 最稳的做法是逐页检查 PTE 是否存在；
+  for (int k = 0; k < npages; k++) {
+    uint64 va = va0 + (uint64)k * PGSIZE;
+
+    // 只对已映射页做 uvmunmap(…,1,1)：
+    // 需要 walk 查 PTE 是否有效（PTE_V）。如果无效就跳过。
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if (pte == 0 || (*pte & PTE_V) == 0)
+      continue;
+
+    uvmunmap(p->pagetable, va, npages, 1);
+  }
+
+  // 如果这次是整段删除（最简单先实现），再释放 file 引用并标记 invalid
+  // （后续你要支持“缩短头/尾”，这里就不能直接 valid=0）
+  vma->valid = 0;
+  fileclose(vma->file);
+  vma->file = 0;
+
+  return 0;
+}
+

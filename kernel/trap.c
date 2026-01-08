@@ -6,6 +6,12 @@
 #include "proc.h"
 #include "defs.h"
 
+#include "fcntl.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+
+
 struct spinlock tickslock;
 uint ticks;
 
@@ -67,7 +73,73 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  }
+  else if (r_scause() == 13 || r_scause() == 15) {
+  // load/store page fault
+
+  uint64 va = r_stval();
+  uint64 va0 = PGROUNDDOWN(va);
+
+  int handled = 0;
+
+  for (int i = 0; i < MAX_VMAS; i++) {
+    if (p->vmas[i].valid != 1)
+      continue;
+
+    uint64 start = p->vmas[i].addr;
+    uint64 end   = start + p->vmas[i].length;
+
+    if (va0 < start || va0 >= end)
+      continue;
+
+    char *pa = kalloc();
+    if (pa == 0)
+      break;
+
+    memset(pa, 0, PGSIZE);
+
+    int file_offset = p->vmas[i].offset + (va0 - start);
+
+    struct file *f = p->vmas[i].file;
+    if (f == 0) {
+      kfree(pa);
+      break;
+    }
+
+    if (f->type != FD_INODE) {
+      kfree(pa);
+      break;
+    }
+
+    ilock(f->ip);
+    int n = readi(f->ip, 0, (uint64)pa, file_offset, PGSIZE);
+    iunlock(f->ip);
+
+    if (n < 0) {
+      kfree(pa);
+      break;
+    }
+
+    int perm = PTE_U;
+    if (p->vmas[i].prot & PROT_READ)  perm |= PTE_R;
+    if (p->vmas[i].prot & PROT_WRITE) perm |= PTE_W;
+
+    // 用 va0（页对齐）映射；pa 传 uint64
+    if (mappages(p->pagetable, va0, PGSIZE, (uint64)pa, perm) != 0) {
+      kfree(pa);
+      break;
+    }
+
+    handled = 1;
+    break;
+  }
+
+  if (!handled) {
+    p->killed = 1;
+  }
+}
+  else
+  {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
