@@ -29,9 +29,10 @@ e1000_init(uint32 *xregs)
 {
   int i;
 
+  //初始化锁 后续传输的时候 可以用锁保护
   initlock(&e1000_lock, "e1000");
 
-  regs = xregs;
+  regs = xregs; 
 
   // Reset the device
   regs[E1000_IMS] = 0; // disable interrupts
@@ -102,7 +103,37 @@ e1000_transmit(struct mbuf *m)
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
   //
-  
+
+  acquire(&e1000_lock);
+
+  // printf("e1000_transmit has been called\n");
+
+  // 查询ring里下一个packet的下标
+  int idx = regs[E1000_TDT];
+
+  if ((tx_ring[idx].status & E1000_TXD_STAT_DD) == 0) {
+    // 之前的传输还没有完成
+    release(&e1000_lock);
+    return -1;
+  }
+
+  // 释放上一个包的内存
+  if (tx_mbufs[idx])
+    mbuffree(tx_mbufs[idx]);
+
+  // 把这个新的网络包的pointer塞到ring这个下标位置
+  tx_mbufs[idx] = m;
+  tx_ring[idx].length = m->len;
+  tx_ring[idx].addr = (uint64) m->head;
+  tx_ring[idx].cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
+
+  //
+  tx_ring[idx].status = 0;
+
+  // 通过将一加到E1000_TDT再对TX_RING_SIZE取模来更新环位置
+  regs[E1000_TDT] = (idx + 1) % TX_RING_SIZE;
+
+  release(&e1000_lock);
   return 0;
 }
 
@@ -115,6 +146,37 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+  while (1)
+  {
+    int idx;
+
+    //向E1000询问下一个等待接收数据包（如果有）所在的环索引
+    idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+    // 检查描述符status部分中的E1000_RXD_STAT_DD位来检查新数据包是否可用
+    if ((rx_ring[idx].status & E1000_RXD_STAT_DD) == 0)
+    {
+      return;
+    }
+
+    // 将mbuf的m->len更新为描述符中报告的长度
+    rx_mbufs[idx]->len = rx_ring[idx].length;
+
+    // 使用net_rx()将mbuf传送到网络栈
+    net_rx(rx_mbufs[idx]);
+
+    // 使用mbufalloc()分配一个新的mbuf，以替换刚刚给net_rx()的mbuf
+    rx_mbufs[idx] = mbufalloc(0);
+
+    // 将描述符的状态位清除为零
+    rx_ring[idx].status = 0;
+
+    // 将其数据指针（m->head）编程到描述符中
+    rx_ring[idx].addr = (uint64)rx_mbufs[idx]->head;
+
+    // 将E1000_RDT寄存器更新为最后处理的环描述符的索引
+    regs[E1000_RDT] = idx;
+  }
 }
 
 void
